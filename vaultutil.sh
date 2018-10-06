@@ -65,7 +65,6 @@ function d_generate_rootca() {
     set -e
     if [[ "$ca_created" != "0" ]]; then
         echo "Generate certificate $name"
-
         vault write $name/root/generate/internal common_name="$description" \
             ttl=$max_lease_ttl key_bits=4096 exclude_cn_from_sans=true > /dev/null 2>&1
     fi
@@ -84,6 +83,18 @@ function d_generate_ca() {
     local max_lease_ttl=${max_lease_ttl:=26280h}
 
     secrets_enable pki $name "$description" $max_lease_ttl
+
+    set +e
+    vault read $name/cert/ca > /dev/null 2>&1
+    ca_created=$?
+    set -e
+    if [[ "$ca_created" != "0" ]]; then
+        echo "Generate certificate $name"
+        vault write -format=json $name/intermediate/generate/internal common_name="$description" \
+            ttl=$max_lease_ttl key_bits=4096 exclude_cn_from_sans=true | jq -r .data.csr | \
+            vault write -format=json $rootca/root/sign-intermediate csr=- use_csr_values=true | jq -r .data.certificate | \
+            vault write $name/intermediate/set-signed certificate=-
+    fi
 }
 
 #-------------------------
