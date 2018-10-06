@@ -1,11 +1,12 @@
 #!/bin/bash
-
 set -e
 
-COMMAND_NAME=$0
+SCRIPT_NAME=$0
+CMD=$1
+
 
 function d_usage() {
-    echo "Usage: $0 {login|generate-ca} [--help]"
+    echo "Usage: $0 {login|generate-ca|generate-rootca} [--help]"
     exit 1
 }
 
@@ -35,8 +36,6 @@ function check_token() {
 }
 
 function d_login() {
-    check_setup
-
     local role_id=$1
     local token=$(vault write -format=json auth/approle/login role_id=$role_id | jq -r '.auth.client_token')
     if [[ ${token//-/} =~ ^[[:xdigit:]]{32}$ ]]; then
@@ -47,17 +46,42 @@ function d_login() {
     fi
 }
 
+function d_generate_rootca() {
+    local name=$1
+    local description=$2
+    local max_lease_ttl=$3
+    local max_lease_ttl=${max_lease_ttl:=87600h}
+
+    if [[ $1 == "--help" || -z $name || -z $description ]]; then
+        echo "Usage: $SCRIPT_NAME $CMD <name> <description> [max_lease_ttl]"
+        exit 1
+    fi
+
+    secrets_enable pki $name "$description" $max_lease_ttl
+
+    set +e
+    vault read $name/cert/ca > /dev/null 2>&1
+    ca_created=$?
+    set -e
+    if [[ "$ca_created" != "0" ]]; then
+        echo "Generate certificate $name"
+
+        vault write $name/root/generate/internal common_name="$description" \
+            ttl=$max_lease_ttl key_bits=4096 exclude_cn_from_sans=true > /dev/null 2>&1
+    fi
+}
+
 function d_generate_ca() {
-    check_setup
-    check_token
-    if [[ $1 == "--help" || $# -lt 2 ]]; then
-        echo "Usage: $COMMAND_NAME generate-ca <name> <description> [max_lease_ttl]"
+    if [[ $1 == "--help" || $# -lt 3 ]]; then
+        echo "Usage: $SCRIPT_NAME $CMD <name> <description> <rootca> [max_lease_ttl]"
         exit 1
     fi
 
     local name=$1
     local description=$2
-    local max_lease_ttl=$3
+    local rootca=$3
+    local max_lease_ttl=$4
+    local max_lease_ttl=${max_lease_ttl:=26280h}
 
     secrets_enable pki $name "$description" $max_lease_ttl
 }
@@ -75,21 +99,28 @@ function secrets_enable() {
     local installed=$(vault secrets list -format=json | jq '."'$secrets_path'/" | .type == "'$secrets_type'"')
     if [[ "$installed" != "true" ]]; then
         vault secrets enable -path=$secrets_path -description="${secrets_description}" -max-lease-ttl=$max_lease_ttl $secrets_type
-        return 1
     fi
-    return 0
 }
 
-cmd=$1
 set +e
 shift
 set -e
-case "$cmd" in
+
+check_setup
+
+if [[ $CMD != "login" ]]; then
+    check_token
+fi
+
+case "$CMD" in
     login)
         d_login $*
         ;;
     generate-ca)
-        d_generate_ca $1 "$2" $3
+        d_generate_ca $1 "$2" $3 $4
+        ;;
+    generate-rootca)
+        d_generate_rootca $1 "$2" $3
         ;;
     *)
         d_usage
