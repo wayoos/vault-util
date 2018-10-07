@@ -6,7 +6,7 @@ CMD=$1
 
 
 function d_usage() {
-    echo "Usage: $0 {login|generate-ca|generate-rootca} [--help]"
+    echo "Usage: $0 {cert|generate-ca|generate-rootca|login|pki-role} [--help]"
     exit 1
 }
 
@@ -92,10 +92,53 @@ function d_generate_ca() {
         echo "Generate certificate $name"
         vault write -format=json $name/intermediate/generate/internal common_name="$description" \
             ttl=$max_lease_ttl key_bits=4096 exclude_cn_from_sans=true | jq -r .data.csr | \
-            vault write -format=json $rootca/root/sign-intermediate csr=- use_csr_values=true | jq -r .data.certificate | \
+            vault write -format=json $rootca/root/sign-intermediate csr=- ttl=$max_lease_ttl use_csr_values=true | jq -r .data.certificate | \
             vault write $name/intermediate/set-signed certificate=-
     fi
 }
+
+function d_pki_role() {
+    if [[ $1 == "--help" || $# -lt 3 ]]; then
+        echo "Usage: $SCRIPT_NAME $CMD <name> <roleName> <parameters>"
+        exit 1
+    fi
+
+    local secret_name=$1
+    local role_name=$2
+    local parameters=$3
+
+    set +e
+    vault read $secret_name/roles/$role_name > /dev/null 2>&1
+    role_created=$?
+    set -e
+    if [[ "$role_created" != "0" ]]; then
+        vault write $secret_name/roles/$role_name $parameters
+    fi
+
+}
+
+function d_cert() {
+    if [[ $1 == "--help" || $# -lt 4 ]]; then
+        echo "Usage: $SCRIPT_NAME $CMD <name> <roleName> <parameters> <outputFile>"
+        exit 1
+    fi
+
+    local secret_name=$1
+    local role_name=$2
+    local parameters=$3
+    local outputFile=$4
+
+    vault write -format=json $secret_name/issue/$role_name $parameters > $outputFile.json
+
+    cat $outputFile.json | jq -r .data.private_key > $outputFile-key.pem
+    cat $outputFile.json | jq -r .data.certificate > $outputFile.pem
+    cat $outputFile.json | jq -r .data.certificate > $outputFile-full.pem
+    cat $outputFile.json | jq -r .data.issuing_ca >> $outputFile-full.pem
+    cat $outputFile.json | jq -r .data.ca_chain[0] >> $outputFile-full.pem
+
+    rm $outputFile.json
+}
+
 
 #-------------------------
 # Enable secrets of type with defined path.
@@ -132,6 +175,12 @@ case "$CMD" in
         ;;
     generate-rootca)
         d_generate_rootca $1 "$2" $3
+        ;;
+    pki-role)
+        d_pki_role $1 $2 "$3"
+        ;;
+    cert)
+        d_cert $1 $2 "$3" $4
         ;;
     *)
         d_usage
