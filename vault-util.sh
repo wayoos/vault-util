@@ -38,12 +38,7 @@ function check_token() {
 function d_login() {
     local role_id=$1
     local token=$(vault write -format=json auth/approle/login role_id=$role_id | jq -r '.auth.client_token')
-    if [[ ${token//-/} =~ ^[[:xdigit:]]{32}$ ]]; then
-        echo $token
-    else
-        echo "Invalid token"
-        exit 1
-    fi
+    echo $token
 }
 
 function d_generate_rootca() {
